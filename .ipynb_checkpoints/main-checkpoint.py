@@ -48,6 +48,11 @@ class TaskUpdate(BaseModel):
     title: Optional[str] = None
     done: Optional[bool] = None
 
+tasks = [
+    {"id": 1, "title": "Learn FastAPI", "done": False},
+    {"id": 2, "title": "Build a CRUD API", "done": False},
+    {"id": 3, "title": "Write tests", "done": True},
+]
 
 def get_next_id():
     if not tasks:

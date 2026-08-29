@@ -42,7 +42,7 @@ def init_db():
 init_db()
 
 class TaskCreate(BaseModel):
-    title: str
+    title: Optional[str] = None
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -116,18 +116,44 @@ def get_task(id: int):
         "done": bool(row[2]),
     }
 
-@app.post("/tasks", status_code=201, summary="Create a task", description="Creates a new task with the given title. `done` is always set to false on creation. Returns 400 if the title is missing or empty.")
+@app.post(
+    "/tasks",
+    status_code=201,
+    summary="Create a task",
+    description="Creates a new task and stores it in the SQLite database. Returns 400 if the title is missing or empty."
+)
 def create_task(task: TaskCreate):
-    if not task.title.strip():
-        raise HTTPException(status_code=400, detail="Title must not be empty")
+    if not task.title or not task.title.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Title must not be empty"
+        )
 
-    new_task = {
-        "id": get_next_id(),
-        "title": task.title,
-        "done": False,
+    connection = sqlite3.connect(DATABASE)
+
+    cursor = connection.execute(
+        "INSERT INTO tasks (title, done) VALUES (?, ?)",
+        (task.title, False)
+    )
+
+    task_id = cursor.lastrowid
+
+    connection.commit()
+
+    cursor = connection.execute(
+        "SELECT id, title, done FROM tasks WHERE id = ?",
+        (task_id,)
+    )
+
+    row = cursor.fetchone()
+
+    connection.close()
+
+    return {
+        "id": row[0],
+        "title": row[1],
+        "done": bool(row[2]),
     }
-    tasks.append(new_task)
-    return new_task
 
 @app.put("/tasks/{id}", summary="Update a task", description="Updates a task's title and/or done status. At least one field must be provided. Returns 404 if the task doesn't exist, 400 for invalid input.")
 def update_task(id: int, update: TaskUpdate):

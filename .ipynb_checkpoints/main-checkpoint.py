@@ -155,40 +155,95 @@ def create_task(task: TaskCreate):
         "done": bool(row[2]),
     }
 
-@app.put("/tasks/{id}", summary="Update a task", description="Updates a task's title and/or done status. At least one field must be provided. Returns 404 if the task doesn't exist, 400 for invalid input.")
+@app.put(
+    "/tasks/{id}",
+    summary="Update a task",
+    description="Updates a task's title and/or done status in the SQLite database."
+)
 def update_task(id: int, update: TaskUpdate):
-    task = None
-    for t in tasks:
-        if t["id"] == id:
-            task = t
-            break
-
-    if task is None:
-        raise HTTPException(status_code=404, detail=f"Task {id} not found")
-
     if update.title is None and update.done is None:
-        raise HTTPException(status_code=400, detail="Request body must include title and/or done")
+        raise HTTPException(
+            status_code=400,
+            detail="Request body must include title and/or done"
+        )
 
     if update.title is not None and not update.title.strip():
-        raise HTTPException(status_code=400, detail="Title must not be empty")
+        raise HTTPException(
+            status_code=400,
+            detail="Title must not be empty"
+        )
 
-    if update.title is not None:
-        task["title"] = update.title
-    if update.done is not None:
-        task["done"] = update.done
+    connection = sqlite3.connect(DATABASE)
 
-    return task
+    cursor = connection.execute(
+        "SELECT id, title, done FROM tasks WHERE id = ?",
+        (id,)
+    )
 
-@app.delete("/tasks/{id}", status_code=204, summary="Delete a task", description="Permanently removes a task from the in-memory list. Returns 404 if the task doesn't exist.")
+    row = cursor.fetchone()
+
+    if row is None:
+        connection.close()
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task {id} not found"
+        )
+
+    new_title = update.title if update.title is not None else row[1]
+    new_done = update.done if update.done is not None else bool(row[2])
+
+    connection.execute(
+        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
+        (new_title, new_done, id)
+    )
+
+    connection.commit()
+
+    cursor = connection.execute(
+        "SELECT id, title, done FROM tasks WHERE id = ?",
+        (id,)
+    )
+
+    updated_row = cursor.fetchone()
+
+    connection.close()
+
+    return {
+        "id": updated_row[0],
+        "title": updated_row[1],
+        "done": bool(updated_row[2]),
+    }
+
+
+@app.delete(
+    "/tasks/{id}",
+    status_code=204,
+    summary="Delete a task",
+    description="Permanently removes a task from the SQLite database."
+)
 def delete_task(id: int):
-    task = None
-    for t in tasks:
-        if t["id"] == id:
-            task = t
-            break
+    connection = sqlite3.connect(DATABASE)
 
-    if task is None:
-        raise HTTPException(status_code=404, detail=f"Task {id} not found")
+    cursor = connection.execute(
+        "SELECT id FROM tasks WHERE id = ?",
+        (id,)
+    )
 
-    tasks.remove(task)
+    row = cursor.fetchone()
+
+    if row is None:
+        connection.close()
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task {id} not found"
+        )
+
+    connection.execute(
+        "DELETE FROM tasks WHERE id = ?",
+        (id,)
+    )
+
+    connection.commit()
+    connection.close()
+
     return Response(status_code=204)

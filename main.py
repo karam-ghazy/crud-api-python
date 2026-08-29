@@ -49,10 +49,6 @@ class TaskUpdate(BaseModel):
     done: Optional[bool] = None
 
 
-def get_next_id():
-    if not tasks:
-        return 1
-    return max(task["id"] for task in tasks) + 1
 
 @app.get("/", summary="API info", description="Returns basic metadata about this API, including its name, version, and available resource endpoints.")
 def read_root():
@@ -66,16 +62,59 @@ def read_root():
 def health_check():
     return {"status": "ok"}
 
-@app.get("/tasks", summary="List all tasks", description="Returns the complete list of tasks currently stored in memory.")
+@app.get(
+    "/tasks",
+    summary="List all tasks",
+    description="Returns all tasks stored in the SQLite database."
+)
 def get_tasks():
-    return tasks
+    connection = sqlite3.connect(DATABASE)
 
-@app.get("/tasks/{id}", summary="Get a single task", description="Returns one task matching the given ID. Returns 404 if no task with that ID exists.")
+    cursor = connection.execute(
+        "SELECT id, title, done FROM tasks"
+    )
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    return [
+        {
+            "id": row[0],
+            "title": row[1],
+            "done": bool(row[2]),
+        }
+        for row in rows
+    ]
+
+@app.get(
+    "/tasks/{id}",
+    summary="Get a single task",
+    description="Returns one task matching the given ID. Returns 404 if no task with that ID exists."
+)
 def get_task(id: int):
-    for task in tasks:
-        if task["id"] == id:
-            return task
-    raise HTTPException(status_code=404, detail=f"Task {id} not found")
+    connection = sqlite3.connect(DATABASE)
+
+    cursor = connection.execute(
+        "SELECT id, title, done FROM tasks WHERE id = ?",
+        (id,)
+    )
+
+    row = cursor.fetchone()
+
+    connection.close()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task {id} not found"
+        )
+
+    return {
+        "id": row[0],
+        "title": row[1],
+        "done": bool(row[2]),
+    }
 
 @app.post("/tasks", status_code=201, summary="Create a task", description="Creates a new task with the given title. `done` is always set to false on creation. Returns 400 if the title is missing or empty.")
 def create_task(task: TaskCreate):

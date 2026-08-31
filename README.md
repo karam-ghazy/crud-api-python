@@ -1,31 +1,30 @@
 # Task API
 
-A simple CRUD REST API for managing tasks, built with Python, FastAPI, and SQLite as a backend engineering learning project.
+A CRUD REST API for managing tasks, built with Python and FastAPI as a backend engineering learning project. The project started with in-memory storage, moved to SQLite, and now runs on **PostgreSQL inside Docker**, orchestrated with **Docker Compose** so the entire stack starts with a single command.
 
 ## Description
 
 This project implements a complete CRUD (Create, Read, Update, Delete) REST API for managing a task list.
 
-The project was originally built with in-memory storage and then extended to use a real SQLite database. The API endpoints, request formats, validation rules, and HTTP status codes remain the same, while the storage layer was replaced with persistent database storage.
+The API endpoints, request formats, validation rules, and HTTP status codes have stayed identical across every storage backend the project has used. Only the storage layer has changed each time — first from an in-memory Python list to SQLite, and now from SQLite to PostgreSQL. That stability is intentional: the project is structured so the API layer and the data layer are cleanly separated, and swapping one doesn't require touching the other.
 
-The main goal of this iteration was to understand the separation between the **API layer** and the **data layer**.
-
-The architecture is now:
+The current architecture is:
 
 ```text
 Client
-   |
-   v
-FastAPI
-   |
-   v
-sqlite3
-   |
-   v
-SQLite (tasks.db)
+   ↓
+FastAPI Container
+   ↓
+PostgreSQL Container
+   ↓
+Docker Volume
 ```
 
-Unlike the previous in-memory implementation, task data now survives when the server is restarted.
+Both containers are started together with:
+
+```bash
+docker compose up
+```
 
 ## Technologies Used
 
@@ -33,8 +32,10 @@ Unlike the previous in-memory implementation, task data now survives when the se
 * FastAPI
 * Uvicorn
 * Pydantic
-* SQLite
-* Python `sqlite3`
+* PostgreSQL
+* `psycopg2`
+* `python-dotenv`
+* Docker & Docker Compose
 * Swagger UI
 * Git & GitHub
 
@@ -44,134 +45,135 @@ Unlike the previous in-memory implementation, task data now survives when the se
 task-api/
 │
 ├── main.py
-├── requirements.txt
-├── README.md
+├── repositories/
+│   └── postgres_task_repository.py
+├── sql/
+│   └── init.sql
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
+├── .env
+├── .env.example
 ├── .gitignore
-└── docs/
-    └── database-screenshot.png
+├── Requirements.txt
+├── README.md
+
 ```
 
-The SQLite database file is:
+## Storage Implementation
 
-```text
-tasks.db
+This project now uses **PostgreSQL**, running in Docker, as its storage layer — replacing the earlier SQLite implementation.
+
+The swap was done by writing a PostgreSQL repository (`repositories/postgres_task_repository.py`) that exposes the same functions and return shapes the SQLite code provided: `get_all_tasks()`, `get_task(id)`, `create_task(title)`, `update_task(id, title, done)`, and `delete_task(id)`. The FastAPI routes in `main.py` were updated only to call this repository instead of running `sqlite3` queries directly — no route paths, request/response formats, validation rules, or HTTP status codes changed in the process. This demonstrates that the storage implementation is fully decoupled from the API layer.
+
+## Database
+
+The database is PostgreSQL, running in a Docker container, with schema defined in `sql/init.sql`:
+
+```sql
+CREATE TABLE IF NOT EXISTS tasks (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    done BOOLEAN NOT NULL DEFAULT FALSE
+);
 ```
 
-It is generated automatically by the application and does not need to be manually created.
+| Column  | Type    | Description                            |
+| ------- | ------- | -------------------------------------- |
+| `id`    | SERIAL  | Unique task identifier and primary key |
+| `title` | TEXT    | Task title                             |
+| `done`  | BOOLEAN | Whether the task is completed          |
 
-## Installation
+This schema is applied automatically the first time the PostgreSQL container starts against an empty data volume — the official Postgres image runs every `.sql` file it finds bind-mounted into `/docker-entrypoint-initdb.d/`, which is where `docker-compose.yml` mounts `sql/init.sql`. On every later restart, this step is skipped automatically once the volume already contains data.
 
-Clone the repository and set up a virtual environment:
+## Running with Docker Compose (current method)
+
+This is the primary way to run the project — one command starts both the API and the database.
+
+**1. Set up your environment file**
 
 ```bash
-git clone <your-repo-url>
-cd <your-repo-folder>
-python3 -m venv venv
+cp .env.example .env
 ```
 
-Activate the virtual environment on Linux/macOS:
+Then edit `.env` with real values if needed. The defaults used throughout this project are:
+
+```env
+DATABASE_URL=postgresql://taskuser:taskpassword@localhost:5432/tasks
+POSTGRES_DB=tasks
+POSTGRES_USER=taskuser
+POSTGRES_PASSWORD=taskpassword
+```
+
+`.env` is gitignored and never committed; `.env.example` documents the required shape with placeholder values only.
+
+**2. Start the stack**
 
 ```bash
-source venv/bin/activate
+docker compose up
 ```
 
-On Windows PowerShell:
-
-```powershell
-venv\Scripts\Activate.ps1
-```
-
-Install the required dependencies:
+The first run builds the FastAPI image and pulls the official `postgres:16` image, which can take a minute. Add `--build` to force a rebuild after changing code or dependencies:
 
 ```bash
-pip install -r requirements.txt
+docker compose up --build
 ```
 
-## Running the Server
-
-Start the FastAPI development server with:
+To run in the background:
 
 ```bash
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
+docker compose up -d
 ```
 
-The API will be available at:
+**3. The API is available at**
 
 ```text
 http://localhost:8000
 ```
 
-Interactive Swagger documentation is available at:
+Interactive Swagger documentation:
 
 ```text
 http://localhost:8000/docs
 ```
 
-## Database
+**4. Stop the stack**
 
-This version of the project uses **SQLite** instead of an in-memory Python list.
-
-SQLite was chosen because it is lightweight, requires no separate database server, and stores the application's data in a single file.
-
-The database file is:
-
-```text
-tasks.db
+```bash
+docker compose down
 ```
 
-The application automatically:
+This stops and removes the containers, but **keeps the named Docker volume** — task data is not lost. See [Persistence Test](#persistence-test) below.
 
-1. Creates `tasks.db` if it does not exist.
-2. Creates the `tasks` table if it does not exist.
-3. Inserts three example tasks when the table is empty.
+## Running Locally Without Docker (legacy method)
 
-The database table contains the following columns:
+The application can still run directly with `uvicorn`, provided a PostgreSQL instance is reachable at the connection string in `.env` (for example, a Postgres container started manually rather than through Compose).
 
-| Column  | Type    | Description                            |
-| ------- | ------- | -------------------------------------- |
-| `id`    | INTEGER | Unique task identifier and primary key |
-| `title` | TEXT    | Task title                             |
-| `done`  | BOOLEAN | Whether the task is completed          |
-
-## Database Persistence
-
-The previous version stored tasks in server memory.
-
-That meant that restarting the server removed any tasks created during the previous session.
-
-The new implementation stores tasks in SQLite:
-
-```text
-Previous:
-
-FastAPI → Python List
-
-Current:
-
-FastAPI → sqlite3 → SQLite
+```bash
+python3 -m venv venv
+source venv/bin/activate      # Windows: venv\Scripts\Activate.ps1
+pip install -r Requirements.txt
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Because the data is stored in `tasks.db`, tasks remain available after restarting the server.
+## Environment Variables
 
-For example:
+Configuration is read from `.env` via `python-dotenv` — no credentials are hard-coded in the Python source.
+
+| Variable            | Purpose                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `DATABASE_URL`      | Full connection string, used when running the app directly on the host (`localhost`)    |
+| `POSTGRES_DB`       | Database name, used by Docker Compose to configure the `db` service                     |
+| `POSTGRES_USER`     | Database user, used by Docker Compose                                                   |
+| `POSTGRES_PASSWORD` | Database password, used by Docker Compose                                               |
+
+Inside Docker Compose, the FastAPI container does **not** connect to PostgreSQL using `localhost`. Each container has its own isolated network namespace, so `localhost` inside the app container refers to the app container itself — not the database. Docker Compose gives every service a hostname matching its service name, resolved automatically over the Compose network. Since the PostgreSQL service is named `db`, `docker-compose.yml` builds the app's connection string as:
 
 ```text
-Create task
-    ↓
-POST /tasks
-    ↓
-SQLite
-    ↓
-tasks.db
-    ↓
-Restart server
-    ↓
-GET /tasks
-    ↓
-Task still exists
+postgresql://taskuser:taskpassword@db:5432/tasks
 ```
 
-This demonstrates persistence and separates the API behavior from the underlying storage implementation.
+using `db:5432` instead of `localhost:5432`. This override is set directly in `docker-compose.yml`'s `environment:` block for the `app` service, so it takes precedence over the `localhost`-based value in the committed `.env` file whenever the app runs inside Compose.
 
 ## API Endpoints
 
@@ -179,13 +181,13 @@ This demonstrates persistence and separates the API behavior from the underlying
 | ------ | ------------- | --------------------------------------------------- |
 | GET    | `/`           | Returns API name, version, and endpoint information |
 | GET    | `/health`     | Returns server health status                        |
-| GET    | `/tasks`      | Returns all tasks from SQLite                       |
-| GET    | `/tasks/{id}` | Returns a single task by ID                         |
-| POST   | `/tasks`      | Creates a new task in SQLite                        |
-| PUT    | `/tasks/{id}` | Updates an existing task                            |
-| DELETE | `/tasks/{id}` | Deletes a task                                      |
+| GET    | `/tasks`      | Returns all tasks from PostgreSQL                    |
+| GET    | `/tasks/{id}` | Returns a single task by ID                          |
+| POST   | `/tasks`      | Creates a new task in PostgreSQL                     |
+| PUT    | `/tasks/{id}` | Updates an existing task                             |
+| DELETE | `/tasks/{id}` | Deletes a task                                       |
 
-The API endpoints remain the same as the previous CRUD implementation. Only the storage layer has changed.
+The API endpoints, request/response shapes, and status codes are unchanged from the SQLite implementation — only the storage layer has changed.
 
 ## Example Usage
 
@@ -213,11 +215,6 @@ content-type: application/json
     "id": 2,
     "title": "Build CRUD API",
     "done": false
-  },
-  {
-    "id": 3,
-    "title": "Learn SQLite",
-    "done": true
   }
 ]
 ```
@@ -228,11 +225,8 @@ content-type: application/json
 curl -i http://localhost:8000/tasks/1
 ```
 
-Example response:
-
 ```text
 HTTP/1.1 200 OK
-content-type: application/json
 ```
 
 ```json
@@ -251,11 +245,8 @@ curl -i -X POST http://localhost:8000/tasks \
   -d '{"title": "Buy milk"}'
 ```
 
-Example response:
-
 ```text
 HTTP/1.1 201 Created
-content-type: application/json
 ```
 
 ```json
@@ -266,7 +257,7 @@ content-type: application/json
 }
 ```
 
-The new task is inserted into the SQLite database.
+The new task is inserted into PostgreSQL.
 
 ### Update a Task
 
@@ -276,11 +267,8 @@ curl -i -X PUT http://localhost:8000/tasks/4 \
   -d '{"done": true}'
 ```
 
-Example response:
-
 ```text
 HTTP/1.1 200 OK
-content-type: application/json
 ```
 
 ```json
@@ -297,23 +285,19 @@ content-type: application/json
 curl -i -X DELETE http://localhost:8000/tasks/4
 ```
 
-Example response:
-
 ```text
 HTTP/1.1 204 No Content
 ```
 
-The task is removed from the SQLite database.
+The task is removed from PostgreSQL.
 
 ## Validation Rules
 
-The API validates incoming data before modifying the database.
+The API validates incoming data before touching the database.
 
 ### POST `/tasks`
 
 The `title` field is required and cannot be empty or contain only whitespace.
-
-Example invalid request:
 
 ```bash
 curl -i -X POST http://localhost:8000/tasks \
@@ -321,53 +305,32 @@ curl -i -X POST http://localhost:8000/tasks \
   -d '{"title": "   "}'
 ```
 
-The API returns:
-
 ```text
 400 Bad Request
 ```
 
 ### PUT `/tasks/{id}`
 
-At least one of the following fields must be provided:
-
-```json
-{
-  "title": "...",
-  "done": true
-}
-```
-
-An empty update body returns:
-
-```text
-400 Bad Request
-```
-
-If a `title` is provided, it cannot be empty or contain only whitespace.
+At least one of `title` or `done` must be provided in the request body. An empty body returns `400 Bad Request`. If `title` is provided, it cannot be empty or whitespace-only.
 
 ## HTTP Status Codes
 
 | Status | Meaning                                                               |
-| ------ | --------------------------------------------------------------------- |
-| 200    | Successful GET or PUT request                                         |
-| 201    | Task successfully created                                             |
-| 204    | Task successfully deleted                                             |
-| 400    | Invalid request body                                                  |
-| 404    | Task ID not found                                                     |
-| 422    | Request body is missing a required field or fails Pydantic validation |
+| ------ | ---------------------------------------------------------------------- |
+| 200    | Successful GET or PUT request                                          |
+| 201    | Task successfully created                                              |
+| 204    | Task successfully deleted                                              |
+| 400    | Invalid request body                                                   |
+| 404    | Task ID not found                                                      |
+| 422    | Request body is missing a required field or fails Pydantic validation  |
 
 ## Error Handling
 
-If a requested task does not exist, the API returns a `404` response.
-
-Example:
+If a requested task does not exist, the API returns `404`:
 
 ```bash
 curl -i http://localhost:8000/tasks/99
 ```
-
-Example response:
 
 ```json
 {
@@ -375,22 +338,38 @@ Example response:
 }
 ```
 
-The API does not return an empty successful response for an unknown task ID.
+## Working Directly With PostgreSQL
 
-## Working Directly With SQLite
+The database can also be inspected and modified directly, bypassing the API, to confirm both are working against the same persistent data.
 
-As part of the database implementation, SQLite was also explored directly using SQL queries.
+Open a `psql` shell inside the running container:
+
+```bash
+docker exec -it $(docker compose ps -q db) psql -U taskuser -d tasks
+```
+
+### List all tables
+
+```sql
+\dt
+```
+
+### Describe the tasks table
+
+```sql
+\d tasks
+```
 
 ### List all tasks
 
 ```sql
-SELECT * FROM tasks;
+SELECT * FROM tasks ORDER BY id;
 ```
 
 ### Show completed tasks
 
 ```sql
-SELECT * FROM tasks WHERE done = 1;
+SELECT * FROM tasks WHERE done = true;
 ```
 
 ### Count all tasks
@@ -402,56 +381,62 @@ SELECT COUNT(*) FROM tasks;
 ### Mark all tasks as completed
 
 ```sql
-UPDATE tasks SET done = 1;
+UPDATE tasks SET done = true;
 ```
 
 ### Delete completed tasks
 
 ```sql
-DELETE FROM tasks WHERE done = 1;
+DELETE FROM tasks WHERE done = true;
 ```
 
-These queries were executed directly against the SQLite database to understand how SQL operations affect the data used by the API.
-
-Changes made directly to the database can then be observed through:
+Changes made directly in `psql` are immediately visible through the API:
 
 ```bash
 curl -i http://localhost:8000/tasks
 ```
 
-This demonstrates that the API and database are working with the same persistent data.
+This confirms the API and the database are reading and writing the same underlying data — not two separate copies.
 
-## Database Screenshot
+## Persistence Test
 
-The SQLite database was inspected using a SQLite database viewer.
+To confirm that PostgreSQL data survives a full stack restart — not just an application restart — the following test was performed:
 
-![SQLite Database](docs/database-screenshot.png)
+1. The stack was started with `docker compose up -d`.
+2. A task titled **"Persistence Test"** was created via `POST /tasks`.
+3. `GET /tasks` confirmed the task was present, with its assigned `id`.
+4. The stack was stopped with `docker compose down` — this removes the containers, but not the named Docker volume.
+5. The stack was started again with `docker compose up -d`.
+6. `GET /tasks` was called again — the **"Persistence Test"** task was still present, with the same `id` and title.
 
-The screenshot shows the `tasks` table and its stored task records.
+This confirms that PostgreSQL's data directory, backed by the named Docker volume `pgdata`, is what preserves task data independently of the container lifecycle. `docker compose down` removes containers but not volumes; only an explicit `docker compose down -v` (or `docker volume rm`) would delete this data.
+
+The volume itself can be inspected directly:
+
+```bash
+docker volume ls
+docker volume inspect crud-api-python_pgdata
+```
 
 ## Interactive Documentation — Swagger UI
 
-FastAPI automatically generates interactive API documentation using Swagger UI.
-
-With the server running, open:
+FastAPI automatically generates interactive API documentation. With the stack running, open:
 
 ```text
 http://localhost:8000/docs
 ```
 
-Swagger UI provides access to all API endpoints and allows requests to be executed directly through the browser using **Try it out**.
-
-![Swagger UI](docs/swagger-screenshot.png)
+Swagger UI provides access to all endpoints and allows requests to be sent directly from the browser using **Try it out**.
 
 ## CRUD Flow
-
-The complete CRUD cycle is:
 
 ```text
 CREATE
 POST /tasks
       ↓
-SQLite INSERT
+Repository INSERT
+      ↓
+PostgreSQL
       ↓
 READ
 GET /tasks
@@ -459,39 +444,52 @@ GET /tasks
 UPDATE
 PUT /tasks/{id}
       ↓
-SQLite UPDATE
+Repository UPDATE
+      ↓
+PostgreSQL
       ↓
 DELETE
 DELETE /tasks/{id}
       ↓
-SQLite DELETE
+Repository DELETE
+      ↓
+PostgreSQL
 ```
 
-All operations use the same API interface while the actual data is stored in SQLite.
+## Project Progression
 
-## What Changed From Week 2
-
-### Week 2
-
-Tasks were stored in memory:
+### Week 2 — In-Memory Storage
 
 ```text
 FastAPI → Python List
 ```
 
-This meant that restarting the server removed changes made during the session.
+Restarting the server erased all data.
 
-### Week 3
-
-Tasks are stored in SQLite:
+### Week 3 — SQLite
 
 ```text
 FastAPI → sqlite3 → tasks.db
 ```
 
-The API endpoints and their behavior remain the same, but the data is now persistent.
+Data persisted across server restarts, stored in a single local file.
 
-This shows an important backend engineering concept:
+### Week 4 — PostgreSQL in Docker + Docker Compose
+
+```text
+FastAPI Container → PostgreSQL Container → Docker Volume
+```
+
+The database moved out of a local file and into a real, separately running database server, containerized with Docker. This stage was broken into discrete steps:
+
+1. **Run PostgreSQL in Docker** with a named volume for persistence.
+2. **Move configuration into `.env`**, gitignored, with a committed `.env.example`.
+3. **Define the schema in `sql/init.sql`**, applied automatically on first container startup.
+4. **Write a PostgreSQL repository** implementing the same interface the SQLite code exposed, then swap it into `main.py` — the routes and validation logic did not change.
+5. **Write a `Dockerfile` and `docker-compose.yml`** so the FastAPI app and PostgreSQL start together with one command.
+6. **Prove persistence** across a full `docker compose down` / `docker compose up` cycle.
+
+Across all of this, the API's endpoints, request/response formats, and status codes never changed — only the storage layer did.
 
 > The API defines what the application does, while the data layer defines where the application stores its data.
 
@@ -504,17 +502,20 @@ Through this project, I practiced:
 * Using HTTP methods correctly
 * Handling HTTP status codes
 * Validating request data with Pydantic
-* Connecting FastAPI to SQLite
-* Creating database tables programmatically
-* Executing SQL queries with Python `sqlite3`
-* Reading, inserting, updating, and deleting database records
-* Understanding persistent data storage
+* Separating API logic from storage logic via a repository pattern
+* Connecting FastAPI to SQLite, and later to PostgreSQL
+* Writing PostgreSQL schema with `CREATE TABLE IF NOT EXISTS`
+* Using parameterized SQL queries to prevent SQL injection
+* Running PostgreSQL in Docker with a persistent named volume
+* Managing configuration and secrets with `.env` / `.env.example`
+* Writing a `Dockerfile` to containerize a FastAPI application
+* Orchestrating multi-container applications with Docker Compose
+* Understanding Docker container networking and service-to-service DNS resolution
+* Proving data persistence across container restarts
 * Testing API behavior with `curl`
 * Using Swagger UI for API testing
 * Documenting and publishing backend projects with GitHub
 
 ## Project Status
 
-The Week 3 database implementation is complete.
-
-The API now uses SQLite for persistent task storage while maintaining the same CRUD interface developed in the previous version.
+The project now runs on PostgreSQL, containerized with Docker and orchestrated with Docker Compose. The full stack starts with a single command (`docker compose up`), and task data persists across both application restarts and full container restarts, backed by a named Docker volume.

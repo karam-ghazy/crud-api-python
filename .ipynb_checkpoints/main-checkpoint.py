@@ -1,45 +1,15 @@
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
-import sqlite3
+
+import repositories.postgres_task_repository as repo
 
 app = FastAPI(
     title="Task API",
-    description="A simple in-memory CRUD API for managing tasks, built as a learning project.",
+    description="A simple CRUD API for managing tasks, built as a learning project.",
     version="1.0",
 )
 
-DATABASE = "tasks.db"
-
-def init_db():
-    
-    connection = sqlite3.connect(DATABASE)
-
-    connection.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            done BOOLEAN NOT NULL DEFAULT 0
-        )
-    """)
-    
-    cursor = connection.execute("SELECT COUNT(*) FROM tasks")
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        connection.executemany(
-            "INSERT INTO tasks (title, done) VALUES (?, ?)",
-            [
-                ("Learn FastAPI", False),
-                ("Build CRUD API", False),
-                ("Learn SQLite", True),
-            ],
-        )
-        
-    connection.commit()
-    connection.close()
-
-init_db()
 
 class TaskCreate(BaseModel):
     title: Optional[str] = None
@@ -65,27 +35,10 @@ def health_check():
 @app.get(
     "/tasks",
     summary="List all tasks",
-    description="Returns all tasks stored in the SQLite database."
+    description="Returns all tasks stored in PostgreSQL."
 )
 def get_tasks():
-    connection = sqlite3.connect(DATABASE)
-
-    cursor = connection.execute(
-        "SELECT id, title, done FROM tasks"
-    )
-
-    rows = cursor.fetchall()
-
-    connection.close()
-
-    return [
-        {
-            "id": row[0],
-            "title": row[1],
-            "done": bool(row[2]),
-        }
-        for row in rows
-    ]
+    return repo.get_all_tasks()
 
 @app.get(
     "/tasks/{id}",
@@ -93,34 +46,21 @@ def get_tasks():
     description="Returns one task matching the given ID. Returns 404 if no task with that ID exists."
 )
 def get_task(id: int):
-    connection = sqlite3.connect(DATABASE)
+    task = repo.get_task(id)
 
-    cursor = connection.execute(
-        "SELECT id, title, done FROM tasks WHERE id = ?",
-        (id,)
-    )
-
-    row = cursor.fetchone()
-
-    connection.close()
-
-    if row is None:
+    if task is None:
         raise HTTPException(
             status_code=404,
             detail=f"Task {id} not found"
         )
 
-    return {
-        "id": row[0],
-        "title": row[1],
-        "done": bool(row[2]),
-    }
+    return task
 
 @app.post(
     "/tasks",
     status_code=201,
     summary="Create a task",
-    description="Creates a new task and stores it in the SQLite database. Returns 400 if the title is missing or empty."
+    description="Creates a new task and stores it in PostgreSQL. Returns 400 if the title is missing or empty."
 )
 def create_task(task: TaskCreate):
     if not task.title or not task.title.strip():
@@ -129,36 +69,12 @@ def create_task(task: TaskCreate):
             detail="Title must not be empty"
         )
 
-    connection = sqlite3.connect(DATABASE)
-
-    cursor = connection.execute(
-        "INSERT INTO tasks (title, done) VALUES (?, ?)",
-        (task.title, False)
-    )
-
-    task_id = cursor.lastrowid
-
-    connection.commit()
-
-    cursor = connection.execute(
-        "SELECT id, title, done FROM tasks WHERE id = ?",
-        (task_id,)
-    )
-
-    row = cursor.fetchone()
-
-    connection.close()
-
-    return {
-        "id": row[0],
-        "title": row[1],
-        "done": bool(row[2]),
-    }
+    return repo.create_task(task.title)
 
 @app.put(
     "/tasks/{id}",
     summary="Update a task",
-    description="Updates a task's title and/or done status in the SQLite database."
+    description="Updates a task's title and/or done status in PostgreSQL."
 )
 def update_task(id: int, update: TaskUpdate):
     if update.title is None and update.done is None:
@@ -173,77 +89,30 @@ def update_task(id: int, update: TaskUpdate):
             detail="Title must not be empty"
         )
 
-    connection = sqlite3.connect(DATABASE)
+    updated = repo.update_task(id, update.title, update.done)
 
-    cursor = connection.execute(
-        "SELECT id, title, done FROM tasks WHERE id = ?",
-        (id,)
-    )
-
-    row = cursor.fetchone()
-
-    if row is None:
-        connection.close()
+    if updated is None:
         raise HTTPException(
             status_code=404,
             detail=f"Task {id} not found"
         )
 
-    new_title = update.title if update.title is not None else row[1]
-    new_done = update.done if update.done is not None else bool(row[2])
-
-    connection.execute(
-        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
-        (new_title, new_done, id)
-    )
-
-    connection.commit()
-
-    cursor = connection.execute(
-        "SELECT id, title, done FROM tasks WHERE id = ?",
-        (id,)
-    )
-
-    updated_row = cursor.fetchone()
-
-    connection.close()
-
-    return {
-        "id": updated_row[0],
-        "title": updated_row[1],
-        "done": bool(updated_row[2]),
-    }
+    return updated
 
 
 @app.delete(
     "/tasks/{id}",
     status_code=204,
     summary="Delete a task",
-    description="Permanently removes a task from the SQLite database."
+    description="Permanently removes a task from PostgreSQL."
 )
 def delete_task(id: int):
-    connection = sqlite3.connect(DATABASE)
+    deleted = repo.delete_task(id)
 
-    cursor = connection.execute(
-        "SELECT id FROM tasks WHERE id = ?",
-        (id,)
-    )
-
-    row = cursor.fetchone()
-
-    if row is None:
-        connection.close()
+    if not deleted:
         raise HTTPException(
             status_code=404,
             detail=f"Task {id} not found"
         )
-
-    connection.execute(
-        "DELETE FROM tasks WHERE id = ?",
-        (id,)
-    )
-
-    connection.commit()
-    connection.close()
 
     return Response(status_code=204)
